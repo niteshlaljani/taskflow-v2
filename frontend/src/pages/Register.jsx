@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Workflow } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
@@ -7,6 +7,7 @@ import { formatApiError } from "@/lib/api";
 export default function Register() {
   const navigate = useNavigate();
   const { register } = useAuth();
+  const [searchParams] = useSearchParams();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,7 +20,8 @@ export default function Register() {
     setLoading(true);
     try {
       await register(email, password, name);
-      navigate("/app", { replace: true });
+      const next = searchParams.get("next") || "/app";
+      navigate(next, { replace: true });
     } catch (err) {
       setError(formatApiError(err));
     } finally {
@@ -29,7 +31,8 @@ export default function Register() {
 
   const onGoogle = () => {
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/app";
+    const next = searchParams.get("next") || "/app";
+    const redirectUrl = window.location.origin + next;
     window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 

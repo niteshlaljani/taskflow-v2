@@ -1,5 +1,5 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
@@ -8,6 +8,10 @@ import AuthCallback from "@/pages/AuthCallback";
 import AppShell from "@/components/AppShell";
 import Board from "@/pages/Board";
 import AppIndex from "@/pages/AppIndex";
+import MyIssues from "@/pages/MyIssues";
+import Projects from "@/pages/Projects";
+import Settings from "@/pages/Settings";
+import JoinInvite from "@/pages/JoinInvite";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -33,6 +37,7 @@ function AppRouter() {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/join/:code" element={<JoinInvite />} />
       <Route
         path="/app"
         element={
@@ -43,10 +48,10 @@ function AppRouter() {
       >
         <Route index element={<AppIndex />} />
         <Route path="board/:projectId" element={<Board />} />
-        <Route path="my-issues" element={<AppIndex />} />
-        <Route path="projects" element={<AppIndex />} />
+        <Route path="my-issues" element={<MyIssues />} />
+        <Route path="projects" element={<Projects />} />
         <Route path="views" element={<AppIndex />} />
-        <Route path="settings" element={<AppIndex />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

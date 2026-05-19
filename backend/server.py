@@ -13,7 +13,7 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
@@ -37,6 +37,53 @@ api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# WebSocket Connection Manager (board real-time sync + presence)
+# ============================================================================
+class BoardConnectionManager:
+    def __init__(self):
+        # project_id -> list of (ws, user_summary)
+        self.rooms: dict = {}
+
+    async def connect(self, project_id: str, websocket: WebSocket, user: dict):
+        await websocket.accept()
+        self.rooms.setdefault(project_id, []).append({"ws": websocket, "user": user})
+        await self.broadcast_presence(project_id)
+
+    async def disconnect(self, project_id: str, websocket: WebSocket):
+        room = self.rooms.get(project_id) or []
+        self.rooms[project_id] = [c for c in room if c["ws"] is not websocket]
+        if not self.rooms[project_id]:
+            self.rooms.pop(project_id, None)
+        await self.broadcast_presence(project_id)
+
+    async def broadcast(self, project_id: str, message: dict):
+        room = self.rooms.get(project_id) or []
+        dead = []
+        for c in room:
+            try:
+                await c["ws"].send_json(message)
+            except Exception:
+                dead.append(c["ws"])
+        for ws in dead:
+            await self.disconnect(project_id, ws)
+
+    async def broadcast_presence(self, project_id: str):
+        room = self.rooms.get(project_id) or []
+        # Deduplicate by user_id
+        seen = {}
+        for c in room:
+            u = c["user"]
+            seen[u["user_id"]] = u
+        await self.broadcast(project_id, {
+            "type": "presence",
+            "users": list(seen.values()),
+        })
+
+
+board_ws = BoardConnectionManager()
 
 
 # ============================================================================
@@ -246,7 +293,11 @@ async def get_current_user(request: Request) -> dict:
 
 
 async def get_user_workspace(user: dict) -> dict:
-    ws = await db.workspaces.find_one({"owner_id": user["user_id"]}, {"_id": 0})
+    # Find workspace where user is owner OR member
+    ws = await db.workspaces.find_one(
+        {"$or": [{"owner_id": user["user_id"]}, {"member_ids": user["user_id"]}]},
+        {"_id": 0},
+    )
     if not ws:
         # auto-create a personal workspace
         ws_id = f"ws_{uuid.uuid4().hex[:12]}"
@@ -255,10 +306,18 @@ async def get_user_workspace(user: dict) -> dict:
             "name": f"{user['name'].split()[0]}'s Workspace",
             "slug": f"ws-{ws_id[-6:]}",
             "owner_id": user["user_id"],
+            "member_ids": [user["user_id"]],
             "created_at": iso(now_utc()),
         }
         await db.workspaces.insert_one(dict(ws))
         ws.pop("_id", None)
+    elif user["user_id"] not in (ws.get("member_ids") or []):
+        # backfill: ensure owner is in member_ids
+        await db.workspaces.update_one(
+            {"workspace_id": ws["workspace_id"]},
+            {"$addToSet": {"member_ids": user["user_id"]}},
+        )
+        ws["member_ids"] = list(set((ws.get("member_ids") or []) + [user["user_id"]]))
     return ws
 
 
@@ -432,8 +491,10 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)):
 @api_router.get("/workspaces/members")
 async def list_members(user: dict = Depends(get_current_user)):
     ws = await get_user_workspace(user)
-    # For MVP: members = owner + any seeded teammates referenced as task assignees
     member_ids = set([ws["owner_id"]])
+    for m in (ws.get("member_ids") or []):
+        member_ids.add(m)
+    # Plus anyone referenced as a task assignee (covers seeded demo teammates)
     assignees = await db.tasks.distinct("assignee_id", {"workspace_id": ws["workspace_id"]})
     for a in assignees:
         if a:
@@ -488,6 +549,7 @@ async def create_task(project_id: str, payload: TaskCreate, user: dict = Depends
     }
     await db.tasks.insert_one(dict(task))
     task.pop("_id", None)
+    await board_ws.broadcast(project_id, {"type": "task.created", "task": task, "by": user["user_id"]})
     return task
 
 
@@ -514,16 +576,19 @@ async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(ge
     if result.matched_count == 0:
         raise HTTPException(404, "Task not found")
     t = await db.tasks.find_one({"task_id": task_id}, {"_id": 0})
+    await board_ws.broadcast(t["project_id"], {"type": "task.updated", "task": t, "by": user["user_id"]})
     return t
 
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
     ws = await get_user_workspace(user)
-    result = await db.tasks.delete_one({"task_id": task_id, "workspace_id": ws["workspace_id"]})
-    if result.deleted_count == 0:
+    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
+    if not t:
         raise HTTPException(404, "Task not found")
+    await db.tasks.delete_one({"task_id": task_id})
     await db.comments.delete_many({"task_id": task_id})
+    await board_ws.broadcast(t["project_id"], {"type": "task.deleted", "task_id": task_id, "by": user["user_id"]})
     return {"ok": True}
 
 
@@ -555,7 +620,224 @@ async def add_comment(task_id: str, payload: CommentCreate, user: dict = Depends
     }
     await db.comments.insert_one(dict(c))
     c.pop("_id", None)
+    await board_ws.broadcast(t["project_id"], {"type": "comment.created", "task_id": task_id, "comment": c, "by": user["user_id"]})
     return c
+
+
+# ============================================================================
+# WebSocket (board real-time + presence)
+# ============================================================================
+async def _authenticate_ws(websocket: WebSocket) -> Optional[dict]:
+    """Authenticate WS by reading either the access_token / session_token cookie."""
+    # Try cookies
+    token = websocket.cookies.get("access_token")
+    if token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            u = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+            if u:
+                return u
+        except jwt.PyJWTError:
+            pass
+
+    session_token = websocket.cookies.get("session_token")
+    if session_token:
+        session = await db.user_sessions.find_one({"session_token": session_token}, {"_id": 0})
+        if session:
+            expires_at = session.get("expires_at")
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            if expires_at and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at and expires_at > now_utc():
+                u = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0, "password_hash": 0})
+                if u:
+                    return u
+
+    # Fallback: ?token=<jwt> query param (since browsers don't allow custom headers on WS)
+    qtoken = websocket.query_params.get("token")
+    if qtoken:
+        try:
+            payload = jwt.decode(qtoken, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            u = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+            if u:
+                return u
+        except jwt.PyJWTError:
+            pass
+
+    return None
+
+
+@api_router.websocket("/ws/board/{project_id}")
+async def board_websocket(websocket: WebSocket, project_id: str):
+    user = await _authenticate_ws(websocket)
+    if not user:
+        await websocket.close(code=4401)
+        return
+    user_summary = {
+        "user_id": user["user_id"],
+        "name": user.get("name"),
+        "picture": user.get("picture"),
+    }
+    await board_ws.connect(project_id, websocket, user_summary)
+    try:
+        while True:
+            # Heartbeat/keepalive — clients can also send presence pings (no special handling needed)
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await board_ws.disconnect(project_id, websocket)
+
+
+# ============================================================================
+# My Issues
+# ============================================================================
+@api_router.get("/my-issues")
+async def my_issues(user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    tasks = await db.tasks.find(
+        {"workspace_id": ws["workspace_id"], "assignee_id": user["user_id"]},
+        {"_id": 0},
+    ).sort("number", -1).to_list(500)
+    return tasks
+
+
+# ============================================================================
+# Project delete
+# ============================================================================
+@api_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    proj = await db.projects.find_one(
+        {"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0}
+    )
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    # Only workspace owner can delete projects
+    if ws["owner_id"] != user["user_id"]:
+        raise HTTPException(403, "Only the workspace owner can delete projects")
+    await db.projects.delete_one({"project_id": project_id})
+    await db.tasks.delete_many({"project_id": project_id})
+    return {"ok": True}
+
+
+# ============================================================================
+# Workspace Invites
+# ============================================================================
+class InviteCreate(BaseModel):
+    expires_in_days: int = 7
+
+
+@api_router.post("/workspaces/invites")
+async def create_invite(payload: InviteCreate, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    if ws["owner_id"] != user["user_id"]:
+        raise HTTPException(403, "Only the workspace owner can create invites")
+    code = uuid.uuid4().hex[:10]
+    expires = now_utc() + timedelta(days=max(1, min(30, payload.expires_in_days)))
+    invite = {
+        "invite_id": f"inv_{uuid.uuid4().hex[:12]}",
+        "code": code,
+        "workspace_id": ws["workspace_id"],
+        "created_by": user["user_id"],
+        "created_at": iso(now_utc()),
+        "expires_at": iso(expires),
+        "used_by": [],
+    }
+    await db.invites.insert_one(dict(invite))
+    invite.pop("_id", None)
+    return invite
+
+
+@api_router.get("/workspaces/invites")
+async def list_invites(user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    if ws["owner_id"] != user["user_id"]:
+        return []
+    items = await db.invites.find(
+        {"workspace_id": ws["workspace_id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    return items
+
+
+@api_router.delete("/workspaces/invites/{invite_id}")
+async def revoke_invite(invite_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    if ws["owner_id"] != user["user_id"]:
+        raise HTTPException(403, "Only the workspace owner can revoke invites")
+    result = await db.invites.delete_one(
+        {"invite_id": invite_id, "workspace_id": ws["workspace_id"]}
+    )
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Invite not found")
+    return {"ok": True}
+
+
+@api_router.get("/invites/{code}")
+async def get_invite(code: str):
+    """Public preview endpoint for an invite code."""
+    invite = await db.invites.find_one({"code": code}, {"_id": 0})
+    if not invite:
+        raise HTTPException(404, "Invite not found")
+    expires_at = invite.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at_dt = datetime.fromisoformat(expires_at)
+    else:
+        expires_at_dt = expires_at
+    if expires_at_dt and expires_at_dt.tzinfo is None:
+        expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+    expired = bool(expires_at_dt and expires_at_dt < now_utc())
+    ws = await db.workspaces.find_one({"workspace_id": invite["workspace_id"]}, {"_id": 0})
+    owner = await db.users.find_one({"user_id": invite["created_by"]}, {"_id": 0, "password_hash": 0})
+    return {
+        "code": invite["code"],
+        "workspace_name": ws["name"] if ws else "Unknown",
+        "inviter_name": owner["name"] if owner else "A teammate",
+        "expired": expired,
+    }
+
+
+@api_router.post("/invites/{code}/accept")
+async def accept_invite(code: str, user: dict = Depends(get_current_user)):
+    invite = await db.invites.find_one({"code": code}, {"_id": 0})
+    if not invite:
+        raise HTTPException(404, "Invite not found")
+    expires_at = invite.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at_dt = datetime.fromisoformat(expires_at)
+    else:
+        expires_at_dt = expires_at
+    if expires_at_dt and expires_at_dt.tzinfo is None:
+        expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+    if expires_at_dt and expires_at_dt < now_utc():
+        raise HTTPException(400, "Invite expired")
+
+    ws = await db.workspaces.find_one({"workspace_id": invite["workspace_id"]}, {"_id": 0})
+    if not ws:
+        raise HTTPException(404, "Workspace no longer exists")
+
+    if user["user_id"] in (ws.get("member_ids") or []) or ws["owner_id"] == user["user_id"]:
+        return {"ok": True, "workspace_id": ws["workspace_id"], "already_member": True}
+
+    # If user already owns/belongs to another workspace, we still let them join this one as a member.
+    # However our get_user_workspace returns the first match — for MVP, joining replaces the user's active workspace.
+    # To support multi-workspace cleanly later, we'll add workspace switcher UI.
+    await db.workspaces.update_one(
+        {"workspace_id": ws["workspace_id"]},
+        {"$addToSet": {"member_ids": user["user_id"]}},
+    )
+    # Also remove user from their previously-owned workspace if it's empty-of-projects (so MVP UX picks the joined one)
+    own_ws = await db.workspaces.find_one(
+        {"owner_id": user["user_id"], "workspace_id": {"$ne": ws["workspace_id"]}}, {"_id": 0}
+    )
+    if own_ws:
+        proj_count = await db.projects.count_documents({"workspace_id": own_ws["workspace_id"]})
+        if proj_count == 0:
+            await db.workspaces.delete_one({"workspace_id": own_ws["workspace_id"]})
+
+    await db.invites.update_one({"code": code}, {"$addToSet": {"used_by": user["user_id"]}})
+    return {"ok": True, "workspace_id": ws["workspace_id"], "already_member": False}
 
 
 # ============================================================================
@@ -748,6 +1030,8 @@ async def on_startup():
     await db.tasks.create_index("task_id", unique=True)
     await db.comments.create_index([("task_id", 1), ("created_at", 1)])
     await db.user_sessions.create_index("session_token", unique=True)
+    await db.invites.create_index("code", unique=True)
+    await db.invites.create_index("workspace_id")
     try:
         await seed_demo()
         await write_test_credentials()

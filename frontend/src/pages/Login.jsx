@@ -21,7 +21,8 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate("/app", { replace: true });
+      const next = searchParams.get("next") || "/app";
+      navigate(next, { replace: true });
     } catch (err) {
       setError(formatApiError(err));
     } finally {
@@ -30,7 +31,8 @@ export default function Login() {
   };
 
   const onGoogle = () => {
-    const redirectUrl = window.location.origin + "/app";
+    const next = searchParams.get("next") || "/app";
+    const redirectUrl = window.location.origin + next;
     window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 
