@@ -1,0 +1,112 @@
+{
+  "theme": "Light/Dark Hybrid (Swiss & High-Contrast)",
+  "archetype": 4,
+  "description": "Developer-first, Linear-style project management tool. High performance, zero fluff, dense typography, stark contrasts.",
+  "typography": {
+    "fonts": {
+      "heading": "IBM Plex Sans",
+      "body": "Inter",
+      "mono": "IBM Plex Mono"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-semibold",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-medium",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "body": "text-sm sm:text-base leading-relaxed",
+      "small": "text-xs text-muted-foreground",
+      "mono_label": "font-mono text-[11px] sm:text-xs tracking-wider uppercase"
+    },
+    "guidelines": [
+      "Headings should use tight letter spacing (tracking-tight or tracking-tighter).",
+      "Task IDs and tags MUST use IBM Plex Mono.",
+      "Never use Inter for headings.",
+      "Import IBM Plex Sans and IBM Plex Mono from Google Fonts or @fontsource."
+    ]
+  },
+  "colors": {
+    "app_shell": {
+      "sidebar_bg": "#0A0A0A",
+      "sidebar_text": "#A3A3A3",
+      "sidebar_text_hover": "#FFFFFF",
+      "sidebar_border": "#262626",
+      "canvas_bg": "#FFFFFF",
+      "canvas_bg_secondary": "#F9FAFB",
+      "canvas_text": "#111827",
+      "canvas_text_muted": "#6B7280",
+      "canvas_border": "#E5E7EB"
+    },
+    "marketing": {
+      "bg": "#0A0A0A",
+      "text": "#FFFFFF",
+      "text_muted": "#A3A3A3",
+      "border": "#262626"
+    },
+    "brand": {
+      "primary": "#0055FF",
+      "primary_hover": "#0044CC"
+    },
+    "status": {
+      "backlog": "#9CA3AF",
+      "todo": "#6B7280",
+      "in_progress": "#0055FF",
+      "done": "#10B981",
+      "urgent": "#EF4444"
+    }
+  },
+  "layout": {
+    "spacing": "Generous on marketing (p-8 to p-24), dense and functional in app (p-2 to p-6).",
+    "corners": "Minimal rounding (rounded-md or rounded-sm). Sharp edges preferred.",
+    "borders": "1px solid borders for structure. The 'Technical' Look (Grid Borders).",
+    "kanban": "Columns should stretch horizontally. Use CSS grid or flex. Task cards are flat with subtle borders, no large shadows.",
+    "marketing_grid": "Use Mode A 'Tetris' Grid for the 3-feature grid section."
+  },
+  "components": {
+    "sidebar": "Dark background. Active states have a subtle white background with 10% opacity.",
+    "task_card": "Flat white background, 1px border. Flex layout for top row (ID, assignee), middle row (Title), bottom row (Tags, Priority).",
+    "slide_over": "Fixed right panel with 1px left border and subtle shadow. Contains rich text and comments. Use Framer Motion to slide in.",
+    "marketing_hero": "Dark mode. Massive H1. Pill badge on top. Floating product screenshot."
+  },
+  "animations": {
+    "hover": "Subtle background color changes and slight border darkening. NO bouncy animations.",
+    "slide_over": "Framer motion right-to-left slide in. Backdrop uses glassmorphism."
+  },
+  "media": {
+    "image_urls": {
+      "marketing_hero_bg": {
+        "url": "https://images.unsplash.com/photo-1685034759882-34583cece8e1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMG1vZGVybiUyMGRhcmslMjB0ZWNobm9sb2d5JTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Dark abstract technology background for hero section"
+      },
+      "marketing_product_mockup": {
+        "url": "https://images.pexels.com/photos/6424589/pexels-photo-6424589.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Laptop screen with code, representing the app dashboard in the marketing page"
+      },
+      "avatar_1": {
+        "url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Assignee avatar - Man wearing henley top"
+      },
+      "avatar_2": {
+        "url": "https://images.unsplash.com/photo-1657180881998-c8a03ef22695?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Assignee avatar - Woman with long hair"
+      },
+      "avatar_3": {
+        "url": "https://images.unsplash.com/photo-1609436132311-e4b0c9370469?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Assignee avatar - Woman in gray and black scarf"
+      },
+      "avatar_4": {
+        "url": "https://images.unsplash.com/photo-1758600432264-b8d2a0fd7d83?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Assignee avatar - Older asian man"
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "Run: yarn add @phosphor-icons/react framer-motion",
+    "Use Phosphor icons for a highly technical, precision feel matching dense dashboards.",
+    "Build the UI focusing on high density and technical precision.",
+    "In the Marketing Page, use dark mode strictly. Hero should have a large 'ruthless efficiency' headline with a blue accent.",
+    "For the App Shell, implement a dark sidebar (w/ workspace branding) and a light canvas for the Kanban board.",
+    "Kanban board uses dot+count headers for columns. Cards should look flat with sharp borders.",
+    "All interactive and key informational elements MUST include a 'data-testid' attribute using kebab-case role-based naming (e.g. data-testid='new-issue-button').",
+    "Use pure HTML/Tailwind for marketing page layout; Shadcn for complex internal dashboard elements like modals/dropdowns.",
+    "Ensure the slide-over task panel has a backdrop-blur."
+  ]
+}
