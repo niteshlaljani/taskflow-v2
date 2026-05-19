@@ -3,11 +3,14 @@ import { AnimatePresence, motion } from "framer-motion";
 import { X, Share2, Send, CheckCircle2, Trash2 } from "lucide-react";
 import { api, formatApiError } from "@/lib/api";
 import { STATUS_META, PRIORITY_META, PriorityIcon } from "@/lib/constants";
+import TaskAttachments from "@/components/TaskAttachments";
+import { useAuth } from "@/context/AuthContext";
 
 const STATUSES = ["backlog", "todo", "in_progress", "done"];
 const PRIORITIES = ["low", "medium", "high", "urgent"];
 
 export default function TaskDetailPanel({ task, members, memberMap, onClose, onUpdate, onDelete }) {
+  const { user } = useAuth();
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState("");
   const [posting, setPosting] = useState(false);
@@ -107,6 +110,10 @@ export default function TaskDetailPanel({ task, members, memberMap, onClose, onU
                       Description
                     </div>
                     <DescriptionField task={task} onUpdate={onUpdate} />
+                  </div>
+
+                  <div className="mt-8 pt-6 border-t border-[var(--tf-border)]">
+                    <TaskAttachments taskId={task.task_id} currentUserId={user?.user_id} />
                   </div>
 
                   <div className="mt-8 pt-6 border-t border-[var(--tf-border)]">

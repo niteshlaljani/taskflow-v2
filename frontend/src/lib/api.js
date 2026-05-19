@@ -9,6 +9,15 @@ export const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+// Inject active workspace header on every request
+api.interceptors.request.use((config) => {
+  try {
+    const wsId = localStorage.getItem("tf_active_workspace");
+    if (wsId) config.headers["X-Workspace-Id"] = wsId;
+  } catch {}
+  return config;
+});
+
 // Format FastAPI errors to a safe string for setState/JSX
 export function formatApiError(err) {
   const detail = err?.response?.data?.detail;

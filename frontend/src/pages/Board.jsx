@@ -29,6 +29,13 @@ export default function Board() {
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [error, setError] = useState("");
   const [activeDragId, setActiveDragId] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    const onSearch = (e) => setSearchQuery((e.detail || "").toLowerCase());
+    window.addEventListener("tf:search", onSearch);
+    return () => window.removeEventListener("tf:search", onSearch);
+  }, []);
 
   const reload = useCallback(async () => {
     setError("");
@@ -77,11 +84,17 @@ export default function Board() {
 
   const grouped = useMemo(() => {
     const g = { backlog: [], todo: [], in_progress: [], done: [] };
+    const q = searchQuery.trim();
     for (const t of tasks) {
-      if (g[t.status]) g[t.status].push(t);
+      if (!g[t.status]) continue;
+      if (q) {
+        const hay = `${t.key} ${t.title} ${t.description || ""} ${t.tag || ""}`.toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      g[t.status].push(t);
     }
     return g;
-  }, [tasks]);
+  }, [tasks, searchQuery]);
 
   const handleCreate = async (payload) => {
     const { data } = await api.post(`/projects/${projectId}/tasks`, payload);

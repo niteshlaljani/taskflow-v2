@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Plus,
   Home as HomeIcon,
@@ -9,12 +9,14 @@ import {
   Settings,
   HelpCircle,
   MessageSquare,
-  Bell,
   Search,
   LogOut,
+  Zap,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
+import NotificationBell from "@/components/NotificationBell";
+import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
 export default function AppShell() {
   const { user, logout } = useAuth();
@@ -22,18 +24,21 @@ export default function AppShell() {
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState(null);
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const { data } = await api.get("/workspaces/current");
-        if (mounted) setWorkspace(data);
-      } catch (e) {
-        // ignore - default labels still render
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
+  const loadWorkspace = async () => {
+    try {
+      const { data } = await api.get("/workspaces/current");
+      setWorkspace(data);
+      try { localStorage.setItem("tf_active_workspace", data.workspace_id); } catch {}
+    } catch (e) {}
+  };
+
+  useEffect(() => { loadWorkspace(); }, []);
+
+  const onWorkspaceSwitch = async (ws) => {
+    setWorkspace(ws);
+    // Reload current page data by navigating to /app (AppIndex will resolve first project of new workspace)
+    navigate("/app", { replace: true });
+  };
 
   const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + "/");
 
@@ -47,11 +52,14 @@ export default function AppShell() {
 
   const handleLogout = async () => {
     await logout();
+    try { localStorage.removeItem("tf_active_workspace"); } catch {}
     navigate("/login", { replace: true });
   };
 
-  const workspaceName = workspace?.name || "Workspace";
-  const workspaceInitial = (workspaceName[0] || "W").toUpperCase();
+  // If user is currently on a board, expose a quick "Sprints" link in the sidebar
+  const boardMatch = location.pathname.match(/^\/app\/board\/([^/]+)/);
+  const sprintsMatch = location.pathname.match(/^\/app\/sprints\/([^/]+)/);
+  const projectId = boardMatch?.[1] || sprintsMatch?.[1];
 
   return (
     <div className="min-h-screen flex bg-white text-[var(--tf-text)]">
@@ -61,19 +69,7 @@ export default function AppShell() {
         data-testid="app-sidebar"
       >
         <div className="px-5 pt-6 pb-5 border-b border-[var(--tf-sidebar-border)]">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-md bg-[#0055ff] grid place-items-center text-white font-bold font-mono text-sm shrink-0">
-              {workspaceInitial}
-            </div>
-            <div className="min-w-0">
-              <div className="text-white font-semibold text-sm leading-tight font-heading truncate" data-testid="sidebar-workspace-name">
-                {workspaceName}
-              </div>
-              <div className="text-[11px] text-neutral-500 font-mono tracking-wider mt-0.5 uppercase">
-                High-performance Team
-              </div>
-            </div>
-          </div>
+          <WorkspaceSwitcher activeWorkspace={workspace} onSwitch={onWorkspaceSwitch} />
         </div>
 
         <div className="px-3 pt-4">
@@ -100,6 +96,18 @@ export default function AppShell() {
               <span>{item.label}</span>
             </Link>
           ))}
+          {projectId && (
+            <Link
+              to={`/app/sprints/${projectId}`}
+              className={`tf-sidebar-item flex items-center gap-2.5 text-sm px-3 py-2 rounded-md ${
+                isActive(`/app/sprints/${projectId}`) ? "tf-sidebar-item-active" : ""
+              }`}
+              data-testid="sidebar-nav-sprints"
+            >
+              <Zap size={15} />
+              <span>Sprints</span>
+            </Link>
+          )}
         </nav>
 
         <div className="px-3 pb-4 mt-2 space-y-0.5 border-t border-[var(--tf-sidebar-border)] pt-3">
@@ -123,7 +131,7 @@ export default function AppShell() {
       <div className="flex-1 min-w-0 flex flex-col bg-[var(--tf-bg-soft)]">
         {/* Topbar */}
         <header className="h-14 border-b border-[var(--tf-border)] bg-white flex items-center px-6 gap-4">
-          <div className="font-heading font-semibold tracking-tight" data-testid="topbar-workspace-name">{workspaceName}</div>
+          <div className="font-heading font-semibold tracking-tight" data-testid="topbar-workspace-name">{workspace?.name || "Workspace"}</div>
           <div className="flex-1 max-w-md relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
             <input
@@ -131,12 +139,14 @@ export default function AppShell() {
               placeholder="Search issues..."
               className="w-full text-sm bg-[#f3f4f6] border border-transparent rounded-md pl-9 pr-3 py-1.5 outline-none focus:border-[var(--tf-primary)] focus:bg-white transition"
               data-testid="topbar-search-input"
+              onChange={(e) => {
+                // Dispatch a window event so the current page can filter locally
+                window.dispatchEvent(new CustomEvent("tf:search", { detail: e.target.value }));
+              }}
             />
           </div>
           <div className="ml-auto flex items-center gap-3">
-            <button className="text-neutral-500 hover:text-neutral-900 transition" data-testid="topbar-notifications-btn">
-              <Bell size={16} />
-            </button>
+            <NotificationBell />
             <button className="text-neutral-500 hover:text-neutral-900 transition" data-testid="topbar-help-btn">
               <HelpCircle size={16} />
             </button>

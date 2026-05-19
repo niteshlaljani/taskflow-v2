@@ -70,6 +70,9 @@ export default function useBoardSocket(projectId, handlers = {}) {
             handlersRef.current.onTaskDeleted?.(msg.task_id, msg.by);
           } else if (msg.type === "comment.created") {
             handlersRef.current.onCommentCreated?.(msg.task_id, msg.comment, msg.by);
+          } else if (msg.type === "notification.created") {
+            // Bell component listens for this and refreshes
+            try { window.dispatchEvent(new CustomEvent("tf:notifications-refresh", { detail: msg })); } catch {}
           }
         } catch {}
       };

@@ -12,6 +12,7 @@ import MyIssues from "@/pages/MyIssues";
 import Projects from "@/pages/Projects";
 import Settings from "@/pages/Settings";
 import JoinInvite from "@/pages/JoinInvite";
+import Sprints from "@/pages/Sprints";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -48,6 +49,7 @@ function AppRouter() {
       >
         <Route index element={<AppIndex />} />
         <Route path="board/:projectId" element={<Board />} />
+        <Route path="sprints/:projectId" element={<Sprints />} />
         <Route path="my-issues" element={<MyIssues />} />
         <Route path="projects" element={<Projects />} />
         <Route path="views" element={<AppIndex />} />
