@@ -193,8 +193,8 @@ export default function Sprints() {
                 <div className="rounded-md border border-[var(--tf-border)] bg-white p-5" data-testid="sprint-burndown">
                   <div className="text-[11px] font-mono uppercase tracking-wider text-neutral-500 mb-3">Burn-down</div>
                   {burndown && burndown.series.length > 0 ? (
-                    <div style={{ width: "100%", height: 220 }}>
-                      <ResponsiveContainer>
+                    <div className="w-full" style={{ height: 220, minWidth: 0 }}>
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                         <LineChart data={burndown.series} margin={{ top: 5, right: 16, bottom: 0, left: -16 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                           <XAxis dataKey="date" tick={{ fontSize: 10, fontFamily: "IBM Plex Mono" }} />
@@ -257,8 +257,8 @@ export default function Sprints() {
               <div className="font-heading text-3xl font-semibold tracking-tight">{velocity.average}</div>
               <div className="text-xs text-neutral-500 mt-0.5">tasks / sprint (avg)</div>
               {velocity.sprints.length > 0 && (
-                <div style={{ width: "100%", height: 140 }} className="mt-4">
-                  <ResponsiveContainer>
+                <div className="w-full mt-4" style={{ height: 140, minWidth: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     <BarChart data={velocity.sprints} margin={{ top: 5, right: 8, bottom: 0, left: -28 }}>
                       <XAxis dataKey="name" tick={{ fontSize: 9, fontFamily: "IBM Plex Mono" }} interval={0} />
                       <YAxis tick={{ fontSize: 9, fontFamily: "IBM Plex Mono" }} allowDecimals={false} />
