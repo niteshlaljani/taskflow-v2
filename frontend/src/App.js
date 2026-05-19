@@ -7,6 +7,7 @@ import Register from "@/pages/Register";
 import AuthCallback from "@/pages/AuthCallback";
 import AppShell from "@/components/AppShell";
 import Board from "@/pages/Board";
+import AppIndex from "@/pages/AppIndex";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -40,12 +41,12 @@ function AppRouter() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/app/board/proj_coreplatform" replace />} />
+        <Route index element={<AppIndex />} />
         <Route path="board/:projectId" element={<Board />} />
-        <Route path="my-issues" element={<Navigate to="/app/board/proj_coreplatform" replace />} />
-        <Route path="projects" element={<Navigate to="/app/board/proj_coreplatform" replace />} />
-        <Route path="views" element={<Navigate to="/app/board/proj_coreplatform" replace />} />
-        <Route path="settings" element={<Navigate to="/app/board/proj_coreplatform" replace />} />
+        <Route path="my-issues" element={<AppIndex />} />
+        <Route path="projects" element={<AppIndex />} />
+        <Route path="views" element={<AppIndex />} />
+        <Route path="settings" element={<AppIndex />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

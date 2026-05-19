@@ -195,8 +195,8 @@ export default function TaskDetailPanel({ task, members, memberMap, onClose, onU
               </div>
             </div>
 
-            {/* Comment composer */}
-            <form onSubmit={postComment} className="px-6 py-3 border-t border-[var(--tf-border)] bg-white flex items-center gap-2">
+            {/* Comment composer (extra pr to clear the fixed 'Made with Emergent' badge in bottom-right) */}
+            <form onSubmit={postComment} className="px-6 py-3 pr-48 border-t border-[var(--tf-border)] bg-white flex items-center gap-2" data-testid="task-detail-composer">
               <input
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
@@ -366,7 +366,7 @@ function PillEditor({ value, options, onChange, testid }) {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-md border border-[var(--tf-border)] bg-white shadow-lg py-1">
+          <div className="absolute z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-md border border-[var(--tf-border)] bg-white shadow-lg py-1 right-0">
             {options.map((o) => (
               <button
                 type="button"

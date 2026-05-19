@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Plus,
@@ -13,11 +14,26 @@ import {
   LogOut,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { api } from "@/lib/api";
 
 export default function AppShell() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [workspace, setWorkspace] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { data } = await api.get("/workspaces/current");
+        if (mounted) setWorkspace(data);
+      } catch (e) {
+        // ignore - default labels still render
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + "/");
 
@@ -34,6 +50,9 @@ export default function AppShell() {
     navigate("/login", { replace: true });
   };
 
+  const workspaceName = workspace?.name || "Workspace";
+  const workspaceInitial = (workspaceName[0] || "W").toUpperCase();
+
   return (
     <div className="min-h-screen flex bg-white text-[var(--tf-text)]">
       {/* Sidebar */}
@@ -44,10 +63,12 @@ export default function AppShell() {
         <div className="px-5 pt-6 pb-5 border-b border-[var(--tf-sidebar-border)]">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-md bg-[#0055ff] grid place-items-center text-white font-bold font-mono text-sm shrink-0">
-              P
+              {workspaceInitial}
             </div>
             <div className="min-w-0">
-              <div className="text-white font-semibold text-sm leading-tight font-heading">Project Workspace</div>
+              <div className="text-white font-semibold text-sm leading-tight font-heading truncate" data-testid="sidebar-workspace-name">
+                {workspaceName}
+              </div>
               <div className="text-[11px] text-neutral-500 font-mono tracking-wider mt-0.5 uppercase">
                 High-performance Team
               </div>
@@ -57,7 +78,7 @@ export default function AppShell() {
 
         <div className="px-3 pt-4">
           <Link
-            to="/app/board/proj_coreplatform"
+            to="/app"
             className="tf-btn-primary w-full flex items-center justify-center gap-1.5 text-sm font-medium py-2 rounded-md"
             data-testid="sidebar-create-new-btn"
           >
@@ -102,7 +123,7 @@ export default function AppShell() {
       <div className="flex-1 min-w-0 flex flex-col bg-[var(--tf-bg-soft)]">
         {/* Topbar */}
         <header className="h-14 border-b border-[var(--tf-border)] bg-white flex items-center px-6 gap-4">
-          <div className="font-heading font-semibold tracking-tight">LinearSync</div>
+          <div className="font-heading font-semibold tracking-tight" data-testid="topbar-workspace-name">{workspaceName}</div>
           <div className="flex-1 max-w-md relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
             <input
