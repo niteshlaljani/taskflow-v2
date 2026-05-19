@@ -1,72 +1,769 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+import os
+import uuid
+import logging
+import bcrypt
+import jwt
+import httpx
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Literal
 
-# Create the main app without a prefix
-app = FastAPI()
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field, EmailStr
 
-# Create a router with the /api prefix
+
+# ============================================================================
+# Config
+# ============================================================================
+MONGO_URL = os.environ['MONGO_URL']
+DB_NAME = os.environ['DB_NAME']
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALGORITHM = "HS256"
+DEMO_EMAIL = os.environ.get('DEMO_EMAIL', 'demo@taskflow.com')
+DEMO_PASSWORD = os.environ.get('DEMO_PASSWORD', 'demo1234')
+
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+
+app = FastAPI(title="TaskFlow API")
 api_router = APIRouter(prefix="/api")
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+# ============================================================================
+# Helpers
+# ============================================================================
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
-# Add your routes to the router instead of directly to app
+
+def iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+def hash_password(p: str) -> str:
+    return bcrypt.hashpw(p.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_access_token(user_id: str, email: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "type": "access",
+        "exp": now_utc() + timedelta(days=7),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def set_jwt_cookie(response: Response, token: str):
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+
+
+def clear_auth_cookies(response: Response):
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("session_token", path="/")
+
+
+def set_session_cookie(response: Response, token: str):
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+
+
+# ============================================================================
+# Pydantic Models
+# ============================================================================
+class User(BaseModel):
+    user_id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    role: str = "member"
+    auth_provider: str = "jwt"  # "jwt" or "google"
+    created_at: str
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6)
+    name: str = Field(min_length=1)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class SessionRequest(BaseModel):
+    session_id: str
+
+
+class WorkspaceCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
+
+
+class Workspace(BaseModel):
+    workspace_id: str
+    name: str
+    slug: str
+    owner_id: str
+    created_at: str
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    key: str = Field(min_length=2, max_length=8)
+    description: Optional[str] = ""
+
+
+class Project(BaseModel):
+    project_id: str
+    workspace_id: str
+    name: str
+    key: str
+    description: str = ""
+    next_task_number: int = 1
+    created_at: str
+
+
+PriorityT = Literal["low", "medium", "high", "urgent"]
+StatusT = Literal["backlog", "todo", "in_progress", "done"]
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(min_length=1)
+    description: Optional[str] = ""
+    status: StatusT = "todo"
+    priority: PriorityT = "medium"
+    assignee_id: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[StatusT] = None
+    priority: Optional[PriorityT] = None
+    assignee_id: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class Task(BaseModel):
+    task_id: str
+    project_id: str
+    workspace_id: str
+    number: int
+    key: str  # e.g. CORE-254
+    title: str
+    description: str = ""
+    status: StatusT
+    priority: PriorityT
+    assignee_id: Optional[str] = None
+    tag: Optional[str] = None
+    creator_id: str
+    created_at: str
+    updated_at: str
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1)
+
+
+class Comment(BaseModel):
+    comment_id: str
+    task_id: str
+    author_id: str
+    body: str
+    created_at: str
+
+
+# ============================================================================
+# Auth Dependency
+# ============================================================================
+async def get_current_user(request: Request) -> dict:
+    # 1) Try JWT access_token cookie
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+            if user:
+                return user
+        except jwt.PyJWTError:
+            pass
+
+    # 2) Try session_token cookie (Emergent Google Auth)
+    session_token = request.cookies.get("session_token")
+    if session_token:
+        session = await db.user_sessions.find_one({"session_token": session_token}, {"_id": 0})
+        if session:
+            expires_at = session.get("expires_at")
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            if expires_at and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at and expires_at > now_utc():
+                user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0, "password_hash": 0})
+                if user:
+                    return user
+
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+async def get_user_workspace(user: dict) -> dict:
+    ws = await db.workspaces.find_one({"owner_id": user["user_id"]}, {"_id": 0})
+    if not ws:
+        # auto-create a personal workspace
+        ws_id = f"ws_{uuid.uuid4().hex[:12]}"
+        ws = {
+            "workspace_id": ws_id,
+            "name": f"{user['name'].split()[0]}'s Workspace",
+            "slug": f"ws-{ws_id[-6:]}",
+            "owner_id": user["user_id"],
+            "created_at": iso(now_utc()),
+        }
+        await db.workspaces.insert_one(dict(ws))
+        ws.pop("_id", None)
+    return ws
+
+
+# ============================================================================
+# Auth Endpoints
+# ============================================================================
+@api_router.post("/auth/register")
+async def register(payload: RegisterRequest, response: Response):
+    email = payload.email.lower().strip()
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    user_doc = {
+        "user_id": user_id,
+        "email": email,
+        "name": payload.name.strip(),
+        "picture": None,
+        "role": "member",
+        "auth_provider": "jwt",
+        "password_hash": hash_password(payload.password),
+        "created_at": iso(now_utc()),
+    }
+    await db.users.insert_one(user_doc)
+
+    token = create_access_token(user_id, email)
+    set_jwt_cookie(response, token)
+    user_doc.pop("password_hash", None)
+    user_doc.pop("_id", None)
+    return {"user": user_doc, "access_token": token}
+
+
+@api_router.post("/auth/login")
+async def login(payload: LoginRequest, response: Response):
+    email = payload.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    token = create_access_token(user["user_id"], email)
+    set_jwt_cookie(response, token)
+    user.pop("password_hash", None)
+    user.pop("_id", None)
+    return {"user": user, "access_token": token}
+
+
+@api_router.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    # If there's a session_token, delete the session from DB
+    st = request.cookies.get("session_token")
+    if st:
+        await db.user_sessions.delete_one({"session_token": st})
+    clear_auth_cookies(response)
+    return {"ok": True}
+
+
+@api_router.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user
+
+
+@api_router.post("/auth/session")
+async def auth_session(payload: SessionRequest, response: Response):
+    """Exchange Emergent session_id (from URL fragment) for a session_token cookie."""
+    async with httpx.AsyncClient(timeout=15) as cli:
+        try:
+            r = await cli.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": payload.session_id},
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logger.exception("Emergent session exchange failed")
+            raise HTTPException(status_code=401, detail=f"Auth session exchange failed: {e}")
+
+    email = (data.get("email") or "").lower().strip()
+    name = data.get("name") or email.split("@")[0]
+    picture = data.get("picture")
+    session_token = data["session_token"]
+
+    if not email:
+        raise HTTPException(status_code=400, detail="No email returned from auth provider")
+
+    # Upsert user (link by email if exists)
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        user_id = existing["user_id"]
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"name": name, "picture": picture}},
+        )
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "role": "member",
+            "auth_provider": "google",
+            "created_at": iso(now_utc()),
+        })
+
+    # Store session
+    expires_at = now_utc() + timedelta(days=7)
+    await db.user_sessions.update_one(
+        {"session_token": session_token},
+        {"$set": {
+            "session_token": session_token,
+            "user_id": user_id,
+            "expires_at": expires_at,
+            "created_at": now_utc(),
+        }},
+        upsert=True,
+    )
+    set_session_cookie(response, session_token)
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    return {"user": user}
+
+
+# ============================================================================
+# Workspaces & Projects
+# ============================================================================
+@api_router.get("/workspaces/current")
+async def current_workspace(user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    return ws
+
+
+@api_router.get("/projects")
+async def list_projects(user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    items = await db.projects.find({"workspace_id": ws["workspace_id"]}, {"_id": 0}).to_list(200)
+    return items
+
+
+@api_router.post("/projects")
+async def create_project(payload: ProjectCreate, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    key = payload.key.upper()
+    project = {
+        "project_id": f"proj_{uuid.uuid4().hex[:12]}",
+        "workspace_id": ws["workspace_id"],
+        "name": payload.name,
+        "key": key,
+        "description": payload.description or "",
+        "next_task_number": 1,
+        "created_at": iso(now_utc()),
+    }
+    await db.projects.insert_one(dict(project))
+    project.pop("_id", None)
+    return project
+
+
+@api_router.get("/projects/{project_id}")
+async def get_project(project_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    p = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    return p
+
+
+# ============================================================================
+# Members
+# ============================================================================
+@api_router.get("/workspaces/members")
+async def list_members(user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    # For MVP: members = owner + any seeded teammates referenced as task assignees
+    member_ids = set([ws["owner_id"]])
+    assignees = await db.tasks.distinct("assignee_id", {"workspace_id": ws["workspace_id"]})
+    for a in assignees:
+        if a:
+            member_ids.add(a)
+    members = await db.users.find(
+        {"user_id": {"$in": list(member_ids)}},
+        {"_id": 0, "password_hash": 0},
+    ).to_list(200)
+    return members
+
+
+# ============================================================================
+# Tasks
+# ============================================================================
+@api_router.get("/projects/{project_id}/tasks")
+async def list_tasks(project_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    proj = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).sort("number", -1).to_list(500)
+    return tasks
+
+
+@api_router.post("/projects/{project_id}/tasks")
+async def create_task(project_id: str, payload: TaskCreate, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    proj = await db.projects.find_one_and_update(
+        {"project_id": project_id, "workspace_id": ws["workspace_id"]},
+        {"$inc": {"next_task_number": 1}},
+    )
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    # default returns the document BEFORE update; this gives us the next number
+    number = int(proj.get("next_task_number", 1))
+
+    task = {
+        "task_id": f"task_{uuid.uuid4().hex[:12]}",
+        "project_id": project_id,
+        "workspace_id": ws["workspace_id"],
+        "number": number,
+        "key": f"{proj['key']}-{number}",
+        "title": payload.title,
+        "description": payload.description or "",
+        "status": payload.status,
+        "priority": payload.priority,
+        "assignee_id": payload.assignee_id,
+        "tag": payload.tag,
+        "creator_id": user["user_id"],
+        "created_at": iso(now_utc()),
+        "updated_at": iso(now_utc()),
+    }
+    await db.tasks.insert_one(dict(task))
+    task.pop("_id", None)
+    return task
+
+
+@api_router.get("/tasks/{task_id}")
+async def get_task(task_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Task not found")
+    return t
+
+
+@api_router.patch("/tasks/{task_id}")
+async def update_task(task_id: str, payload: TaskUpdate, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    update = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in ["assignee_id", "tag", "description"]}
+    if not update:
+        raise HTTPException(400, "Nothing to update")
+    update["updated_at"] = iso(now_utc())
+    result = await db.tasks.update_one(
+        {"task_id": task_id, "workspace_id": ws["workspace_id"]},
+        {"$set": update},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Task not found")
+    t = await db.tasks.find_one({"task_id": task_id}, {"_id": 0})
+    return t
+
+
+@api_router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    result = await db.tasks.delete_one({"task_id": task_id, "workspace_id": ws["workspace_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Task not found")
+    await db.comments.delete_many({"task_id": task_id})
+    return {"ok": True}
+
+
+# ============================================================================
+# Comments
+# ============================================================================
+@api_router.get("/tasks/{task_id}/comments")
+async def list_comments(task_id: str, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Task not found")
+    comments = await db.comments.find({"task_id": task_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    return comments
+
+
+@api_router.post("/tasks/{task_id}/comments")
+async def add_comment(task_id: str, payload: CommentCreate, user: dict = Depends(get_current_user)):
+    ws = await get_user_workspace(user)
+    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Task not found")
+    c = {
+        "comment_id": f"cmt_{uuid.uuid4().hex[:12]}",
+        "task_id": task_id,
+        "author_id": user["user_id"],
+        "body": payload.body,
+        "created_at": iso(now_utc()),
+    }
+    await db.comments.insert_one(dict(c))
+    c.pop("_id", None)
+    return c
+
+
+# ============================================================================
+# Health
+# ============================================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"status": "ok", "service": "TaskFlow API"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+# ============================================================================
+# Startup: indexes + demo seed
+# ============================================================================
+DEMO_AVATARS = {
+    "sarah": "https://images.unsplash.com/photo-1657180881998-c8a03ef22695?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+    "david": "https://images.unsplash.com/photo-1758600432264-b8d2a0fd7d83?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+    "marcus": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+    "priya": "https://images.unsplash.com/photo-1609436132311-e4b0c9370469?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMGZhY2UlMjBuZXV0cmFsJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzkxODM2ODh8MA&ixlib=rb-4.1.0&q=85",
+}
 
-# Include the router in the main app
+
+async def seed_demo():
+    """Idempotently seed demo user + workspace + project + tasks."""
+    # 1. Demo user
+    demo_email = DEMO_EMAIL.lower()
+    demo_user = await db.users.find_one({"email": demo_email})
+    if demo_user is None:
+        demo_user_id = "user_demouser0001"
+        demo_user = {
+            "user_id": demo_user_id,
+            "email": demo_email,
+            "name": "Demo User",
+            "picture": DEMO_AVATARS["marcus"],
+            "role": "admin",
+            "auth_provider": "jwt",
+            "password_hash": hash_password(DEMO_PASSWORD),
+            "created_at": iso(now_utc()),
+        }
+        await db.users.insert_one(dict(demo_user))
+    else:
+        # ensure password is the current DEMO_PASSWORD (idempotent reset)
+        if not verify_password(DEMO_PASSWORD, demo_user.get("password_hash", "")):
+            await db.users.update_one(
+                {"email": demo_email},
+                {"$set": {"password_hash": hash_password(DEMO_PASSWORD)}},
+            )
+    demo_user_id = demo_user["user_id"]
+
+    # 2. Teammates (assignees)
+    teammates = [
+        {"user_id": "user_sarahj000001", "email": "sarah.j@taskflow.demo", "name": "Sarah J.", "picture": DEMO_AVATARS["sarah"]},
+        {"user_id": "user_davidc000001", "email": "david.c@taskflow.demo", "name": "David Chen", "picture": DEMO_AVATARS["david"]},
+        {"user_id": "user_priyak000001", "email": "priya.k@taskflow.demo", "name": "Priya K.", "picture": DEMO_AVATARS["priya"]},
+    ]
+    for tm in teammates:
+        await db.users.update_one(
+            {"user_id": tm["user_id"]},
+            {"$setOnInsert": {
+                **tm,
+                "role": "member",
+                "auth_provider": "demo",
+                "password_hash": "",
+                "created_at": iso(now_utc()),
+            }},
+            upsert=True,
+        )
+
+    # 3. Workspace
+    ws = await db.workspaces.find_one({"owner_id": demo_user_id})
+    if ws is None:
+        ws = {
+            "workspace_id": "ws_linearsync001",
+            "name": "LinearSync",
+            "slug": "linearsync",
+            "owner_id": demo_user_id,
+            "created_at": iso(now_utc()),
+        }
+        await db.workspaces.insert_one(dict(ws))
+    ws_id = ws["workspace_id"]
+
+    # 4. Project "Core Platform" (key CORE)
+    proj = await db.projects.find_one({"workspace_id": ws_id, "key": "CORE"})
+    if proj is None:
+        proj = {
+            "project_id": "proj_coreplatform",
+            "workspace_id": ws_id,
+            "name": "Core Platform",
+            "key": "CORE",
+            "description": "Engineering / Core Platform",
+            "next_task_number": 257,  # tasks below go up to 256
+            "created_at": iso(now_utc()),
+        }
+        await db.projects.insert_one(dict(proj))
+    proj_id = proj["project_id"]
+
+    # 5. Seed tasks (only if no tasks exist yet for this project)
+    existing_count = await db.tasks.count_documents({"project_id": proj_id})
+    if existing_count == 0:
+        seed_tasks = [
+            # In Progress (3)
+            {"number": 254, "title": "Integrate Webhooks for CI/CD Pipeline", "status": "in_progress", "priority": "urgent", "tag": "FEATURE", "assignee_id": "user_davidc000001",
+             "description": "We need to implement a robust webhook system that triggers our CI/CD pipelines whenever code is pushed or merged. This includes:\n\n- Setting up endpoint listeners for GitHub and GitLab\n- Implementing secret validation for security\n- Mapping payload data to our internal build triggers\n- Error handling and retry logic for failed deliveries"},
+            {"number": 253, "title": "Server-side rendering investigation", "status": "in_progress", "priority": "medium", "tag": "RESEARCH", "assignee_id": "user_sarahj000001", "description": "Investigate SSR options."},
+            {"number": 252, "title": "Migrate auth to httpOnly cookies", "status": "in_progress", "priority": "high", "tag": "SECURITY", "assignee_id": demo_user_id, "description": "Move JWT tokens out of localStorage."},
+            # To Do (5)
+            {"number": 255, "title": "Refactor Global State Management for Auth", "status": "todo", "priority": "medium", "tag": "INFRASTRUCTURE", "assignee_id": "user_priyak000001", "description": "Reduce re-renders on auth context updates."},
+            {"number": 250, "title": "Add keyboard shortcuts for board navigation", "status": "todo", "priority": "low", "tag": "UX", "assignee_id": "user_sarahj000001", "description": "j/k to navigate, e to edit."},
+            {"number": 249, "title": "Implement bulk task assignment", "status": "todo", "priority": "medium", "tag": "FEATURE", "assignee_id": "user_davidc000001", "description": "Select multiple cards and assign in one action."},
+            {"number": 248, "title": "Dark mode polish for empty states", "status": "todo", "priority": "low", "tag": "DESIGN", "assignee_id": "user_priyak000001", "description": ""},
+            {"number": 247, "title": "Audit logging for permission changes", "status": "todo", "priority": "high", "tag": "SECURITY", "assignee_id": demo_user_id, "description": ""},
+            # Backlog (12)
+            {"number": 256, "title": "Optimize SVG Rendering Performance", "status": "backlog", "priority": "low", "tag": "PERFORMANCE", "assignee_id": "user_marcus" if False else "user_sarahj000001", "description": "Reduce icon paint cost on large boards."},
+            {"number": 246, "title": "Investigate flicker on board switch", "status": "backlog", "priority": "low", "tag": "BUG", "assignee_id": "user_priyak000001", "description": ""},
+            {"number": 245, "title": "Document REST API in OpenAPI", "status": "backlog", "priority": "medium", "tag": "DOCS", "assignee_id": demo_user_id, "description": ""},
+            {"number": 244, "title": "Add markdown support to descriptions", "status": "backlog", "priority": "medium", "tag": "FEATURE", "assignee_id": "user_sarahj000001", "description": ""},
+            {"number": 243, "title": "Migrate from REST to GraphQL", "status": "backlog", "priority": "low", "tag": "INFRASTRUCTURE", "assignee_id": "user_davidc000001", "description": ""},
+            {"number": 242, "title": "Slack notifications on assignment", "status": "backlog", "priority": "medium", "tag": "INTEGRATION", "assignee_id": demo_user_id, "description": ""},
+            {"number": 241, "title": "Per-project custom fields", "status": "backlog", "priority": "low", "tag": "FEATURE", "assignee_id": "user_priyak000001", "description": ""},
+            {"number": 240, "title": "Re-architect search index", "status": "backlog", "priority": "high", "tag": "PERFORMANCE", "assignee_id": "user_davidc000001", "description": ""},
+            {"number": 239, "title": "Mobile responsive board view", "status": "backlog", "priority": "medium", "tag": "UX", "assignee_id": "user_sarahj000001", "description": ""},
+            {"number": 238, "title": "Recurring tasks support", "status": "backlog", "priority": "low", "tag": "FEATURE", "assignee_id": "user_priyak000001", "description": ""},
+            {"number": 237, "title": "Two-factor authentication", "status": "backlog", "priority": "high", "tag": "SECURITY", "assignee_id": demo_user_id, "description": ""},
+            {"number": 236, "title": "Export board as CSV", "status": "backlog", "priority": "low", "tag": "FEATURE", "assignee_id": "user_davidc000001", "description": ""},
+            # Done (24) - we'll seed 5 visible ones
+            {"number": 251, "title": "Fix z-index collisions in dropdowns", "status": "done", "priority": "medium", "tag": "UI FIX", "assignee_id": "user_sarahj000001", "description": ""},
+            {"number": 235, "title": "Ship onboarding empty state", "status": "done", "priority": "medium", "tag": "UX", "assignee_id": "user_priyak000001", "description": ""},
+            {"number": 234, "title": "Add rate limit middleware", "status": "done", "priority": "high", "tag": "SECURITY", "assignee_id": demo_user_id, "description": ""},
+            {"number": 233, "title": "Initial Kanban board MVP", "status": "done", "priority": "urgent", "tag": "FEATURE", "assignee_id": "user_davidc000001", "description": ""},
+            {"number": 232, "title": "Set up CI", "status": "done", "priority": "medium", "tag": "INFRA", "assignee_id": "user_sarahj000001", "description": ""},
+        ]
+        docs = []
+        for t in seed_tasks:
+            docs.append({
+                "task_id": f"task_seed_{t['number']:04d}",
+                "project_id": proj_id,
+                "workspace_id": ws_id,
+                "number": t["number"],
+                "key": f"CORE-{t['number']}",
+                "title": t["title"],
+                "description": t["description"],
+                "status": t["status"],
+                "priority": t["priority"],
+                "assignee_id": t["assignee_id"],
+                "tag": t.get("tag"),
+                "creator_id": demo_user_id,
+                "created_at": iso(now_utc()),
+                "updated_at": iso(now_utc()),
+            })
+        await db.tasks.insert_many(docs)
+
+        # Seed one comment on CORE-254 (matches mockup)
+        await db.comments.insert_one({
+            "comment_id": "cmt_seed_001",
+            "task_id": "task_seed_0254",
+            "author_id": "user_sarahj000001",
+            "body": "I've started the initial draft for the security validation middleware. Should be ready for review tomorrow.",
+            "created_at": iso(now_utc() - timedelta(hours=2)),
+        })
+
+
+async def write_test_credentials():
+    target = Path("/app/memory")
+    target.mkdir(parents=True, exist_ok=True)
+    creds = target / "test_credentials.md"
+    creds.write_text(
+        "# TaskFlow Test Credentials\n\n"
+        "## JWT Demo Account\n"
+        f"- Email: `{DEMO_EMAIL}`\n"
+        f"- Password: `{DEMO_PASSWORD}`\n"
+        "- Role: admin\n\n"
+        "## Auth Endpoints\n"
+        "- POST /api/auth/register\n"
+        "- POST /api/auth/login\n"
+        "- POST /api/auth/logout\n"
+        "- GET  /api/auth/me\n"
+        "- POST /api/auth/session  (Emergent Google session_id exchange)\n\n"
+        "## Notes\n"
+        "- Both JWT cookie (`access_token`) and Emergent session cookie (`session_token`) are accepted by `get_current_user`.\n"
+        "- Demo workspace `LinearSync` and project `Core Platform` (key CORE) are auto-seeded.\n"
+    )
+
+
+@app.on_event("startup")
+async def on_startup():
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("user_id", unique=True)
+    await db.workspaces.create_index("owner_id")
+    await db.projects.create_index([("workspace_id", 1), ("key", 1)])
+    await db.tasks.create_index([("project_id", 1), ("number", -1)])
+    await db.tasks.create_index("task_id", unique=True)
+    await db.comments.create_index([("task_id", 1), ("created_at", 1)])
+    await db.user_sessions.create_index("session_token", unique=True)
+    try:
+        await seed_demo()
+        await write_test_credentials()
+        logger.info("Demo seed complete")
+    except Exception:
+        logger.exception("Seed error")
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    client.close()
+
+
+# ============================================================================
+# Mount
+# ============================================================================
 app.include_router(api_router)
 
 app.add_middleware(
@@ -76,14 +773,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
