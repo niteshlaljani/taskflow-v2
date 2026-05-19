@@ -218,7 +218,7 @@ function AvatarStack({ members }) {
         {visible.map((m) => (
           <img
             key={m.user_id}
-            src={m.picture || ""}
+            src={m.picture || undefined}
             alt={m.name}
             className="w-7 h-7 rounded-full border-2 border-white object-cover bg-neutral-200"
           />
