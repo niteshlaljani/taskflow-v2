@@ -382,6 +382,22 @@ async def me(user: dict = Depends(get_current_user)):
     return user
 
 
+@api_router.post("/auth/ws-token")
+async def ws_token(user: dict = Depends(get_current_user)):
+    """Mint a short-lived JWT to authenticate the WS handshake when cookies aren't forwarded by the ingress."""
+    token = jwt.encode(
+        {
+            "sub": user["user_id"],
+            "email": user.get("email", ""),
+            "type": "access",
+            "exp": now_utc() + timedelta(minutes=30),
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+    return {"token": token}
+
+
 @api_router.post("/auth/session")
 async def auth_session(payload: SessionRequest, response: Response):
     """Exchange Emergent session_id (from URL fragment) for a session_token cookie."""

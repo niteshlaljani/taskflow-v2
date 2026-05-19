@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { api } from "@/lib/api";
 
 /**
  * Hook for board real-time WebSocket — receives task.created/updated/deleted, comment.created, presence.
- * Cookies (access_token / session_token) are automatically sent on WS handshake.
+ *
+ * Auth strategy: we fetch a short-lived JWT from POST /api/auth/ws-token and pass it as a
+ * `?token=` query parameter on the WS URL. This is necessary because the k8s ingress in front
+ * of the backend does not forward httpOnly cookies on the WSS upgrade handshake.
  */
 export default function useBoardSocket(projectId, handlers = {}) {
   const [presence, setPresence] = useState([]);
@@ -20,12 +24,26 @@ export default function useBoardSocket(projectId, handlers = {}) {
 
   useEffect(() => {
     if (!projectId) return;
-    const backend = process.env.REACT_APP_BACKEND_URL || "";
-    const wsUrl = backend.replace(/^http/, "ws") + `/api/ws/board/${projectId}`;
     let alive = true;
     let retry = null;
 
-    const open = () => {
+    const open = async () => {
+      if (!alive) return;
+      let token = "";
+      try {
+        const { data } = await api.post("/auth/ws-token");
+        token = data?.token || "";
+      } catch {
+        // Not authenticated — skip (no WS for anonymous)
+        return;
+      }
+      if (!alive) return;
+
+      const backend = process.env.REACT_APP_BACKEND_URL || "";
+      const wsUrl =
+        backend.replace(/^http/, "ws") +
+        `/api/ws/board/${projectId}` +
+        (token ? `?token=${encodeURIComponent(token)}` : "");
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
