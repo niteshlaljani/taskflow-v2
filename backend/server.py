@@ -356,6 +356,46 @@ async def resolve_workspace(request: Request, user: dict) -> dict:
     return await get_user_workspace(user, active)
 
 
+async def get_accessible_project(project_id: str, user: dict) -> tuple[dict, dict]:
+    """Find a project ANYWHERE the user has access (across all their workspaces).
+
+    Returns (project, workspace). Raises 404 if not found or no access.
+    Use this for any endpoint addressed by a specific project_id — it removes the
+    'active workspace must match' coupling, so notification-deep-links and
+    multi-workspace flows resolve correctly.
+    """
+    proj = await db.projects.find_one({"project_id": project_id}, {"_id": 0})
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    ws = await db.workspaces.find_one(
+        {
+            "workspace_id": proj["workspace_id"],
+            "$or": [{"owner_id": user["user_id"]}, {"member_ids": user["user_id"]}],
+        },
+        {"_id": 0},
+    )
+    if not ws:
+        raise HTTPException(404, "Project not found")
+    return proj, ws
+
+
+async def get_accessible_task(task_id: str, user: dict) -> tuple[dict, dict]:
+    """Find a task across all workspaces the user belongs to. Returns (task, workspace)."""
+    t = await db.tasks.find_one({"task_id": task_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Task not found")
+    ws = await db.workspaces.find_one(
+        {
+            "workspace_id": t["workspace_id"],
+            "$or": [{"owner_id": user["user_id"]}, {"member_ids": user["user_id"]}],
+        },
+        {"_id": 0},
+    )
+    if not ws:
+        raise HTTPException(404, "Task not found")
+    return t, ws
+
+
 # ============================================================================
 # Auth Endpoints
 # ============================================================================
@@ -529,10 +569,7 @@ async def create_project(request: Request, payload: ProjectCreate, user: dict = 
 
 @api_router.get("/projects/{project_id}")
 async def get_project(request: Request, project_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    p = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not p:
-        raise HTTPException(404, "Project not found")
+    p, _ = await get_accessible_project(project_id, user)
     return p
 
 
@@ -562,19 +599,17 @@ async def list_members(request: Request, user: dict = Depends(get_current_user))
 # ============================================================================
 @api_router.get("/projects/{project_id}/tasks")
 async def list_tasks(request: Request, project_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    proj = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not proj:
-        raise HTTPException(404, "Project not found")
+    proj, ws = await get_accessible_project(project_id, user)
     tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).sort("number", -1).to_list(500)
     return tasks
 
 
 @api_router.post("/projects/{project_id}/tasks")
 async def create_task(request: Request, project_id: str, payload: TaskCreate, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
+    # Verify access first
+    _proj, ws = await get_accessible_project(project_id, user)
     proj = await db.projects.find_one_and_update(
-        {"project_id": project_id, "workspace_id": ws["workspace_id"]},
+        {"project_id": project_id},
         {"$inc": {"next_task_number": 1}},
     )
     if not proj:
@@ -615,22 +650,19 @@ async def create_task(request: Request, project_id: str, payload: TaskCreate, us
 
 @api_router.get("/tasks/{task_id}")
 async def get_task(request: Request, task_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    t, ws = await get_accessible_task(task_id, user)
     return t
 
 
 @api_router.patch("/tasks/{task_id}")
 async def update_task(request: Request, task_id: str, payload: TaskUpdate, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
+    _t, ws = await get_accessible_task(task_id, user)
     update = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in ["assignee_id", "tag", "description"]}
     if not update:
         raise HTTPException(400, "Nothing to update")
     update["updated_at"] = iso(now_utc())
     result = await db.tasks.update_one(
-        {"task_id": task_id, "workspace_id": ws["workspace_id"]},
+        {"task_id": task_id},
         {"$set": update},
     )
     if result.matched_count == 0:
@@ -652,10 +684,7 @@ async def update_task(request: Request, task_id: str, payload: TaskUpdate, user:
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(request: Request, task_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    t, ws = await get_accessible_task(task_id, user)
     await db.tasks.delete_one({"task_id": task_id})
     await db.comments.delete_many({"task_id": task_id})
     await board_ws.broadcast(t["project_id"], {"type": "task.deleted", "task_id": task_id, "by": user["user_id"]})
@@ -667,10 +696,7 @@ async def delete_task(request: Request, task_id: str, user: dict = Depends(get_c
 # ============================================================================
 @api_router.get("/tasks/{task_id}/comments")
 async def list_comments(request: Request, task_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    t, ws = await get_accessible_task(task_id, user)
     comments = await db.comments.find({"task_id": task_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
     return comments
 
@@ -699,10 +725,7 @@ async def _notify(user_id: str, by_user_id: str, ntype: str, task_id: str = None
 
 @api_router.post("/tasks/{task_id}/comments")
 async def add_comment(request: Request, task_id: str, payload: CommentCreate, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    t, ws = await get_accessible_task(task_id, user)
     c = {
         "comment_id": f"cmt_{uuid.uuid4().hex[:12]}",
         "task_id": task_id,
@@ -798,9 +821,15 @@ async def board_websocket(websocket: WebSocket, project_id: str):
 # ============================================================================
 @api_router.get("/my-issues")
 async def my_issues(request: Request, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
+    # Return assigned tasks across ALL workspaces the user belongs to,
+    # not just the currently-active one. Notifications & deep links assume this.
+    workspaces = await db.workspaces.find(
+        {"$or": [{"owner_id": user["user_id"]}, {"member_ids": user["user_id"]}]},
+        {"_id": 0, "workspace_id": 1},
+    ).to_list(50)
+    ws_ids = [w["workspace_id"] for w in workspaces]
     tasks = await db.tasks.find(
-        {"workspace_id": ws["workspace_id"], "assignee_id": user["user_id"]},
+        {"workspace_id": {"$in": ws_ids}, "assignee_id": user["user_id"]},
         {"_id": 0},
     ).sort("number", -1).to_list(500)
     return tasks
@@ -811,12 +840,7 @@ async def my_issues(request: Request, user: dict = Depends(get_current_user)):
 # ============================================================================
 @api_router.delete("/projects/{project_id}")
 async def delete_project(request: Request, project_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    proj = await db.projects.find_one(
-        {"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0}
-    )
-    if not proj:
-        raise HTTPException(404, "Project not found")
+    proj, ws = await get_accessible_project(project_id, user)
     if ws["owner_id"] != user["user_id"]:
         raise HTTPException(403, "Only the workspace owner can delete projects")
     # Cascade: delete all tasks, their comments, attachments, and any sprints belonging to this project
@@ -907,7 +931,7 @@ async def get_invite(code: str):
 
 
 @api_router.post("/invites/{code}/accept")
-async def accept_invite(code: str, user: dict = Depends(get_current_user)):
+async def accept_invite(code: str, response: Response, user: dict = Depends(get_current_user)):
     invite = await db.invites.find_one({"code": code}, {"_id": 0})
     if not invite:
         raise HTTPException(404, "Invite not found")
@@ -925,17 +949,26 @@ async def accept_invite(code: str, user: dict = Depends(get_current_user)):
     if not ws:
         raise HTTPException(404, "Workspace no longer exists")
 
+    def _set_active(ws_id: str):
+        response.set_cookie(
+            key="active_workspace",
+            value=ws_id,
+            httponly=False,
+            secure=True,
+            samesite="none",
+            max_age=60 * 60 * 24 * 365,
+            path="/",
+        )
+
     if user["user_id"] in (ws.get("member_ids") or []) or ws["owner_id"] == user["user_id"]:
+        _set_active(ws["workspace_id"])
         return {"ok": True, "workspace_id": ws["workspace_id"], "already_member": True}
 
-    # If user already owns/belongs to another workspace, we still let them join this one as a member.
-    # However our get_user_workspace returns the first match — for MVP, joining replaces the user's active workspace.
-    # To support multi-workspace cleanly later, we'll add workspace switcher UI.
     await db.workspaces.update_one(
         {"workspace_id": ws["workspace_id"]},
         {"$addToSet": {"member_ids": user["user_id"]}},
     )
-    # Also remove user from their previously-owned workspace if it's empty-of-projects (so MVP UX picks the joined one)
+    # Remove user's previously-owned empty workspace
     own_ws = await db.workspaces.find_one(
         {"owner_id": user["user_id"], "workspace_id": {"$ne": ws["workspace_id"]}}, {"_id": 0}
     )
@@ -945,6 +978,7 @@ async def accept_invite(code: str, user: dict = Depends(get_current_user)):
             await db.workspaces.delete_one({"workspace_id": own_ws["workspace_id"]})
 
     await db.invites.update_one({"code": code}, {"$addToSet": {"used_by": user["user_id"]}})
+    _set_active(ws["workspace_id"])
     return {"ok": True, "workspace_id": ws["workspace_id"], "already_member": False}
 
 
@@ -1007,20 +1041,14 @@ class SprintUpdate(BaseModel):
 
 @api_router.get("/projects/{project_id}/sprints")
 async def list_sprints(request: Request, project_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    proj = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not proj:
-        raise HTTPException(404, "Project not found")
+    proj, ws = await get_accessible_project(project_id, user)
     items = await db.sprints.find({"project_id": project_id}, {"_id": 0}).sort("start_date", -1).to_list(100)
     return items
 
 
 @api_router.post("/projects/{project_id}/sprints")
 async def create_sprint(request: Request, project_id: str, payload: SprintCreate, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    proj = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not proj:
-        raise HTTPException(404, "Project not found")
+    proj, ws = await get_accessible_project(project_id, user)
     sprint = {
         "sprint_id": f"spr_{uuid.uuid4().hex[:12]}",
         "project_id": project_id,
@@ -1039,32 +1067,42 @@ async def create_sprint(request: Request, project_id: str, payload: SprintCreate
     return sprint
 
 
+async def get_accessible_sprint(sprint_id: str, user: dict) -> tuple[dict, dict]:
+    """Find a sprint across all workspaces the user belongs to. Returns (sprint, workspace)."""
+    sprint = await db.sprints.find_one({"sprint_id": sprint_id}, {"_id": 0})
+    if not sprint:
+        raise HTTPException(404, "Sprint not found")
+    ws = await db.workspaces.find_one(
+        {
+            "workspace_id": sprint["workspace_id"],
+            "$or": [{"owner_id": user["user_id"]}, {"member_ids": user["user_id"]}],
+        },
+        {"_id": 0},
+    )
+    if not ws:
+        raise HTTPException(404, "Sprint not found")
+    return sprint, ws
+
+
 @api_router.patch("/sprints/{sprint_id}")
 async def update_sprint(request: Request, sprint_id: str, payload: SprintUpdate, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
+    _s, ws = await get_accessible_sprint(sprint_id, user)
     update = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
     if not update:
         raise HTTPException(400, "Nothing to update")
     if update.get("status") == "completed":
         update["completed_at"] = iso(now_utc())
-    result = await db.sprints.update_one(
-        {"sprint_id": sprint_id, "workspace_id": ws["workspace_id"]},
-        {"$set": update},
-    )
-    if result.matched_count == 0:
-        raise HTTPException(404, "Sprint not found")
+    await db.sprints.update_one({"sprint_id": sprint_id}, {"$set": update})
     s = await db.sprints.find_one({"sprint_id": sprint_id}, {"_id": 0})
     return s
 
 
 @api_router.delete("/sprints/{sprint_id}")
 async def delete_sprint(request: Request, sprint_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
+    _s, ws = await get_accessible_sprint(sprint_id, user)
     if ws["owner_id"] != user["user_id"]:
         raise HTTPException(403, "Only workspace owner can delete sprints")
-    result = await db.sprints.delete_one({"sprint_id": sprint_id, "workspace_id": ws["workspace_id"]})
-    if result.deleted_count == 0:
-        raise HTTPException(404, "Sprint not found")
+    await db.sprints.delete_one({"sprint_id": sprint_id})
     return {"ok": True}
 
 
@@ -1074,10 +1112,7 @@ class SprintTaskBody(BaseModel):
 
 @api_router.post("/sprints/{sprint_id}/tasks")
 async def add_sprint_tasks(request: Request, sprint_id: str, payload: SprintTaskBody, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    sprint = await db.sprints.find_one({"sprint_id": sprint_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not sprint:
-        raise HTTPException(404, "Sprint not found")
+    _s, _ws = await get_accessible_sprint(sprint_id, user)
     await db.sprints.update_one(
         {"sprint_id": sprint_id},
         {"$addToSet": {"task_ids": {"$each": payload.task_ids}}},
@@ -1088,10 +1123,7 @@ async def add_sprint_tasks(request: Request, sprint_id: str, payload: SprintTask
 
 @api_router.delete("/sprints/{sprint_id}/tasks/{task_id}")
 async def remove_sprint_task(request: Request, sprint_id: str, task_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    sprint = await db.sprints.find_one({"sprint_id": sprint_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not sprint:
-        raise HTTPException(404, "Sprint not found")
+    _s, _ws = await get_accessible_sprint(sprint_id, user)
     await db.sprints.update_one({"sprint_id": sprint_id}, {"$pull": {"task_ids": task_id}})
     s = await db.sprints.find_one({"sprint_id": sprint_id}, {"_id": 0})
     return s
@@ -1104,10 +1136,7 @@ async def sprint_burndown(request: Request, sprint_id: str, user: dict = Depends
     Series: one entry per day from start_date through min(end_date, today),
     where `remaining` is count of tasks in sprint not yet 'done' as of end-of-day.
     """
-    ws = await resolve_workspace(request, user)
-    sprint = await db.sprints.find_one({"sprint_id": sprint_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not sprint:
-        raise HTTPException(404, "Sprint not found")
+    sprint, _ws = await get_accessible_sprint(sprint_id, user)
     task_ids = sprint.get("task_ids") or []
     total = len(task_ids)
     start = datetime.fromisoformat(sprint["start_date"]).replace(tzinfo=timezone.utc)
@@ -1152,10 +1181,7 @@ async def sprint_burndown(request: Request, sprint_id: str, user: dict = Depends
 @api_router.get("/projects/{project_id}/velocity")
 async def project_velocity(request: Request, project_id: str, user: dict = Depends(get_current_user)):
     """Return number of tasks completed per completed sprint, plus average."""
-    ws = await resolve_workspace(request, user)
-    proj = await db.projects.find_one({"project_id": project_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not proj:
-        raise HTTPException(404, "Project not found")
+    proj, ws = await get_accessible_project(project_id, user)
     sprints = await db.sprints.find(
         {"project_id": project_id, "status": "completed"}, {"_id": 0}
     ).sort("completed_at", 1).to_list(50)
@@ -1241,20 +1267,14 @@ class AttachmentCreate(BaseModel):
 
 @api_router.get("/tasks/{task_id}/attachments")
 async def list_attachments(request: Request, task_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    t, ws = await get_accessible_task(task_id, user)
     items = await db.attachments.find({"task_id": task_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
     return items
 
 
 @api_router.post("/tasks/{task_id}/attachments")
 async def add_attachment(request: Request, task_id: str, payload: AttachmentCreate, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
-    t = await db.tasks.find_one({"task_id": task_id, "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    t, ws = await get_accessible_task(task_id, user)
     doc = {
         "attachment_id": f"att_{uuid.uuid4().hex[:12]}",
         "task_id": task_id,
@@ -1275,14 +1295,11 @@ async def add_attachment(request: Request, task_id: str, payload: AttachmentCrea
 
 @api_router.delete("/attachments/{attachment_id}")
 async def delete_attachment(request: Request, attachment_id: str, user: dict = Depends(get_current_user)):
-    ws = await resolve_workspace(request, user)
     att = await db.attachments.find_one({"attachment_id": attachment_id}, {"_id": 0})
     if not att:
         raise HTTPException(404, "Attachment not found")
-    # Verify task is in user's workspace
-    t = await db.tasks.find_one({"task_id": att["task_id"], "workspace_id": ws["workspace_id"]}, {"_id": 0})
-    if not t:
-        raise HTTPException(404, "Task not found")
+    # Verify task is accessible across user's workspaces
+    t, ws = await get_accessible_task(att["task_id"], user)
     # Only uploader or workspace owner can delete
     if att["uploader_id"] != user["user_id"] and ws["owner_id"] != user["user_id"]:
         raise HTTPException(403, "Only the uploader or workspace owner can delete attachments")

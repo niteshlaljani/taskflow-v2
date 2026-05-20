@@ -26,7 +26,11 @@ export default function JoinInvite() {
   const accept = async () => {
     setAccepting(true);
     try {
-      await api.post(`/invites/${code}/accept`);
+      const { data } = await api.post(`/invites/${code}/accept`);
+      // Make the joined workspace the active one for subsequent API calls
+      if (data?.workspace_id) {
+        try { localStorage.setItem("tf_active_workspace", data.workspace_id); } catch {}
+      }
       navigate("/app", { replace: true });
     } catch (e) {
       setError(formatApiError(e));

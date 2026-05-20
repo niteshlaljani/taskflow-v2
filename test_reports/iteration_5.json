@@ -1,0 +1,52 @@
+{
+  "summary": "Iter 5 — Cross-workspace deep-link + Views page bug fix verification. All 53 prior pytest tests still GREEN (no regressions) and 6 new cross-workspace pytest tests authored & passing (test_cross_workspace.py). Total 59/59 pytest tests passing in 18.5s. Frontend smoke verified end-to-end: demo login lands on /app/board/proj_coreplatform with full kanban; /app/views renders new Views page with data-testid='views-page', saved-views rail (view-filter-all=27, urgent=8, in_progress=4, done=5), task rows (views-row-CORE-XXX) clickable -> navigate to board; topbar-notifications-btn opens notifications-dropdown; sidebar-nav-sprints, sidebar-nav-projects, sidebar-nav-settings all navigate without errors. Bug fix confirmed end-to-end: cross-workspace project GET (used to 404), cross-workspace tasks list, cross-workspace my-issues, accept-invite now sets `active_workspace` cookie, sprint endpoints (patch + add tasks + burndown) work with mismatched active workspace, attachment upload+delete works for uploader from foreign active workspace.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "WebSocket real-time board sync (carryover from iter 3 & 4)",
+        "issue": "Still un-retested in this iteration; backend exposes POST /api/auth/ws-token but frontend useBoardSocket.js still relies on cookie-based WS auth that the ingress doesn't forward. Not in scope of this iteration's bug fixes.",
+        "affected_selectors": ["[data-testid=board-presence]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Sprints burn-down chart",
+        "issues": ["(Carryover) Recharts 'width(-1) and height(-1) of chart should be greater than 0' warning on first render — chart still renders, just noisy in console."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cross_workspace.py",
+    "/app/backend/tests/test_backend.py",
+    "/app/backend/tests/test_sprint4.py",
+    "/app/test_reports/pytest/iter5_all.xml",
+    "/app/test_reports/pytest/iter5_xws.xml"
+  ],
+  "action_items": [
+    "(Carryover from iter 3) Wire useBoardSocket.js to call POST /api/auth/ws-token and append ?token=<jwt> to the WS URL.",
+    "(Carryover from iter 4) Fix Recharts width(-1)/height(-1) warning on Sprints burn-down by giving ResponsiveContainer a defined parent height/aspect."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1535 lines — split into routers/{auth,workspaces,projects,tasks,comments,invites,sprints,notifications,attachments,ws}.py as next refactor.",
+    "`get_user_workspace` auto-creates a personal workspace on first call. As a side effect, the active_workspace cookie set by accept-invite may be silently replaced if a stale request to /projects without X-Workspace-Id is fired immediately after registration — works fine in current frontend but a subtle ordering footgun for future code.",
+    "Views.jsx N+1 fetches `/projects/{id}/tasks` once per project the user has access to. For a user in many workspaces with many projects this can be slow; consider adding a server-side /api/my-tasks-across-workspaces endpoint when projects > ~5.",
+    "Attachment delete also removes Cloudinary asset, but project DELETE cascade does NOT trigger Cloudinary destroy for each attachment public_id (best-effort only on single delete). For demo this is fine; flag for prod hardening.",
+    "`X-Workspace-Id` header silently picks the user's default workspace when the header value is inaccessible (fail-open). Stricter alternative: 403."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cross_workspace.py (new — 6 cross-workspace bug-fix tests)"
+  ],
+  "success_rate": {"backend": "100% (59/59 pytest — 53 prior + 6 new cross-workspace)", "frontend": "100% on iteration 5 scope — login, board, Views page with rail+rows+navigation, Sprints/Projects/Settings nav, notification bell+dropdown"},
+  "test_credentials": "demo@taskflow.com / demo1234 — working. Cross-workspace tests dynamically register TEST_<prefix>_<hex>@example.com accounts.",
+  "seed_data_creation": "Pytest run created a handful of TEST_-prefixed records (sprint TEST_xws_sprint, task TEST_xws_assigned/TEST_xws_att, attachment TEST_xws.png, project TEST_Inbox). All single-task/single-sprint/single-attachment fixtures self-clean. A few TEST_-prefixed transient records may remain in CORE; safe to ignore. New test users register dynamic emails and their auto-created personal workspaces are removed (when empty) by accept-invite.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Cross-workspace deep linking is fixed and covered by /app/backend/tests/test_cross_workspace.py. To exercise the multi-workspace WorkspaceSwitcher (enabled state) end-to-end in the UI, log in as one of the TEST_ accounts that already accepted the demo invite (they will have 2 workspaces) and verify [data-testid=workspace-switcher-list] shows both with checkmark on the active one. Views page testid is `views-page`, filters are `view-filter-{all|urgent|in_progress|done}` (singular `view`, not `views`), rows are `views-row-{KEY}`. Open WS->frontend integration remains the outstanding item.",
+  "rca of the issue": "Original bug RCA: project/task/sprint endpoints called `resolve_workspace(request, user)` which resolves to the active workspace (cookie/header). For a user in 2 workspaces (own Inbox + joined LinearSync) whose active cookie pointed at Inbox, fetching the LinearSync project would resolve workspace=Inbox, then filter projects by workspace_id=Inbox and miss the LinearSync project -> 'Project not found'. Fix: introduced get_accessible_project/get_accessible_task/get_accessible_sprint helpers that look up the resource by id and grant access if the user owns or is a member of the resource's own workspace (regardless of active cookie). /api/my-issues now aggregates across all workspaces the user belongs to. accept-invite now sets `active_workspace` cookie to the joined workspace so subsequent calls default to it. All four behaviors independently verified by tests."
+}
