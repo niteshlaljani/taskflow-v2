@@ -56,3 +56,15 @@ Tagline: "Manage projects with ruthless efficiency. Zero fluff, absolute control
 
 ## Context: why server.py split is deferred
 1500 lines is well-organized with clear `# =====` section banners (Auth, Workspaces, Projects, Tasks, Comments, WebSocket, Invites, Sprints, Notifications, Attachments, Health). All endpoints share `db`, `board_ws`, `_notify`, `get_current_user`, `resolve_workspace`, `_authenticate_ws` — splitting requires routing these as module-level state or dependency injection through a shared `app.state`. A safe extraction would take ~30–45 min plus a full regression. Marked P0 for the next refactor pass; functional surface is fully covered.
+
+## 2026-01 Hotfix (post-Sprint 4)
+
+### Fixed
+- **Cross-workspace deep linking** — when a user belonged to 2+ workspaces (e.g. their own auto-Inbox + a joined LinearSync via invite), notifications and direct task links resolved to the wrong workspace and showed "Project not found". Introduced `get_accessible_project`, `get_accessible_task`, `get_accessible_sprint` helpers that look up the resource by id and grant access if the user owns OR is a member of the resource's own workspace, regardless of the active workspace cookie.
+- **`/api/my-issues` cross-workspace** — now returns assigned tasks from every workspace the user belongs to (was scoped to the active workspace only).
+- **Accept invite sets active workspace** — `POST /api/invites/{code}/accept` now sets the `active_workspace` cookie to the joined workspace so subsequent requests default to it. Frontend also writes it to `localStorage.tf_active_workspace`.
+- **Views page** — was a no-op redirect, now a real page (`/app/views`) with saved-view filters: All issues, Urgent, Active (in-progress), Recently shipped — aggregated across all the user's projects with click-through to the right board.
+
+### Test status
+- 59/59 pytest green (53 prior + 6 new `test_cross_workspace.py` cases)
+- Frontend bug-fix flow verified end-to-end with two browser contexts (demo + dummy invitee).
