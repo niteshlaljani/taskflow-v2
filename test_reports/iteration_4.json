@@ -1,0 +1,50 @@
+{
+  "summary": "Sprint 4 testing — Backend 53/53 pytest GREEN (added 23 new tests in test_sprint4.py covering multi-workspace list/switch + X-Workspace-Id header scoping, Sprints CRUD + add/remove/burndown/velocity with status transitions, Notifications creation on task assignment + commenting, Cloudinary signed signature endpoint, Attachments metadata CRUD with uploader/owner permission enforcement, full project DELETE cascade to tasks+comments+attachments+sprints, and CORS preflight from the preview origin). All 30 previous regression tests still pass. Frontend E2E verified: demo login -> Kanban board, topbar Notification Bell + dropdown render (topbar-notifications-btn, notifications-dropdown), WorkspaceSwitcher correctly DISABLED for single-workspace demo user, TaskDetailPanel renders Attachments section (task-attachments + attachment-file-input 'Attach a file'), Sprints page accessible via sidebar-nav-sprints (only shows when /app/board/:id or /app/sprints/:id), Create Sprint modal opens with all data-testids (sprint-name-input, sprint-start-input, sprint-end-input, sprint-goal-input, sprint-submit-btn), sprint created and appears in list, Start (sprint-start-btn) flips status to active and renders sprint-burndown chart, Complete (sprint-complete-btn) flips status to completed and velocity-card refreshes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "WebSocket real-time board sync (carryover from iteration_3)",
+        "issue": "Not retested in this iteration; was reported as broken in iteration_3 (browser WS connect fails because httpOnly cookie isn't forwarded through the WSS upgrade by the ingress). The backend now exposes POST /api/auth/ws-token (server.py:420) — frontend useBoardSocket.js needs to call it and append ?token=<jwt> per the iteration_3 RCA. Not part of this Sprint 4 scope; flagging it remains outstanding.",
+        "affected_selectors": ["[data-testid=board-presence]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Sprints page / burn-down chart",
+        "issues": ["Recharts logs a console warning on initial render: 'The width(-1) and height(-1) of chart should be greater than 0' — chart still renders correctly once the container measures, but the warning is noisy. Likely fix: wrap chart in a sized container or set explicit aspect/minHeight on the ResponsiveContainer."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_sprint4.py",
+    "/app/backend/tests/test_backend.py",
+    "/app/test_reports/pytest/sprint4_results.xml"
+  ],
+  "action_items": [
+    "(Carryover from iter 3) Wire useBoardSocket.js to call POST /api/auth/ws-token and append ?token=<jwt> to the WS URL; backend ws-token endpoint already exists.",
+    "(Minor) Fix Recharts width(-1)/height(-1) warning on Sprints burn-down by giving ResponsiveContainer a defined parent height or aspect ratio."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1517 lines — well overdue for splitting into routers/{auth,workspaces,projects,tasks,comments,invites,sprints,notifications,attachments,ws}.py. Already noted as deferred tech debt; should be the next refactor.",
+    "X-Workspace-Id header fallback silently picks the user's default workspace when the header value isn't accessible to the user. This is a fail-open behavior — verify it's intentional. Stricter alternative: 403 when header is set but inaccessible.",
+    "Cloudinary signature endpoint signs only {timestamp, folder} — that's correct for current usage but if any extra upload param (e.g. tags, eager, public_id) is sent from the frontend it must be added to the signed set or Cloudinary will reject the upload. Worth adding a comment.",
+    "Burn-down endpoint estimates completion from task.updated_at, which can be wrong if the task was updated for any reason after being marked done. Acceptable for MVP; long-term, store an explicit done_at on tasks.",
+    "DELETE /api/projects cascade is now correctly removing tasks, comments, attachments and sprints (verified by test_delete_project_cascades_tasks_comments_attachments_sprints) — Cloudinary destroy for attachment public_ids is NOT called during cascade (best-effort only on single attachment delete). For demo data this is fine; for production consider triggering cloudinary destroy on cascade too."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_sprint4.py (new — 23 Sprint 4 tests)"
+  ],
+  "success_rate": {"backend": "100% (53/53)", "frontend": "100% on Sprint 4 scope — login, board, notifications bell+dropdown, workspace-switcher (disabled state), task-attachments section, Sprints page (create -> start -> complete -> burndown -> velocity)"},
+  "test_credentials": "demo@taskflow.com / demo1234 — working",
+  "seed_data_creation": "Test run created and self-cleaned: 1 E2E sprint (E2E_Sprint_Test) on Core Platform — deleted at end of frontend run. Pytest created several TEST_-prefixed sprints/tasks/attachments/notifications — most cleaned up by their fixtures; a few TEST_ tasks may remain on CORE board. New test users (test_<hex>@example.com) registered for invite/notification permission tests; their auto-created workspaces are auto-removed when accepting LinearSync invite.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sprint 4 is GREEN across backend + frontend. The only outstanding integration issue is the WebSocket real-time board sync from iteration_3 — backend supports both cookie and ?token= query-param auth; frontend hook still needs to use the token form. Recharts warning on Sprints burn-down is a low-priority polish item. To re-test multi-workspace switcher's enabled state, register a second user, have them accept a demo invite, then login as the second user (they will have 2 workspaces) and verify [data-testid=workspace-switcher-list] renders with a checkmark.",
+  "rca of the issue": "No new bugs found in Sprint 4 scope. Cloudinary signed-upload flow not exercised in frontend (per spec) — backend signature endpoint returns valid signed params and was verified via signing+HMAC structure (signature length, all required fields present). Attachment metadata persistence verified via POST -> GET list, plus 403 for non-uploader/non-owner delete attempts."
+}

@@ -1,0 +1,150 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --tf-bg: #ffffff;
+    --tf-bg-soft: #f9fafb;
+    --tf-text: #0a0a0a;
+    --tf-text-muted: #6b7280;
+    --tf-border: #e5e7eb;
+    --tf-sidebar-bg: #0a0a0a;
+    --tf-sidebar-text: #a3a3a3;
+    --tf-sidebar-border: #262626;
+    --tf-primary: #0055ff;
+    --tf-primary-hover: #0044cc;
+    --tf-urgent: #ef4444;
+    --tf-done: #10b981;
+
+    /* shadcn */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 4%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 4%;
+    --primary: 220 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 9% 15%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 45%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 220 9% 15%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 220 100% 50%;
+    --radius: 0.375rem;
+}
+
+* {
+    @apply border-border;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--tf-bg);
+    color: var(--tf-text);
+}
+
+.font-heading {
+    font-family: 'IBM Plex Sans', sans-serif;
+    letter-spacing: -0.02em;
+}
+
+.font-mono,
+.tf-mono {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Selection */
+::selection {
+    background: #0055ff;
+    color: #fff;
+}
+
+/* Custom scrollbar (board) */
+.tf-scroll::-webkit-scrollbar {
+    height: 10px;
+    width: 10px;
+}
+.tf-scroll::-webkit-scrollbar-thumb {
+    background: #e5e7eb;
+    border-radius: 999px;
+}
+.tf-scroll::-webkit-scrollbar-thumb:hover {
+    background: #d1d5db;
+}
+
+/* Marketing dot grid */
+.tf-dotgrid {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+    background-size: 24px 24px;
+}
+
+.tf-hairline {
+    box-shadow: inset 0 0 0 1px var(--tf-border);
+}
+
+/* Buttons */
+.tf-btn-primary {
+    background: var(--tf-primary);
+    color: #fff;
+    transition: background-color 0.15s ease;
+}
+.tf-btn-primary:hover {
+    background: var(--tf-primary-hover);
+}
+
+/* Backdrop blur for slideover */
+.tf-backdrop {
+    background: rgba(10, 10, 10, 0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+/* Sidebar item */
+.tf-sidebar-item {
+    color: var(--tf-sidebar-text);
+    transition:
+        background 0.15s ease,
+        color 0.15s ease;
+}
+.tf-sidebar-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+}
+.tf-sidebar-item-active {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    box-shadow: inset 2px 0 0 var(--tf-primary);
+}
+
+/* Status dot */
+.tf-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    display: inline-block;
+}
+
+/* Marketing nav blur */
+.tf-marketing-nav {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(10, 10, 10, 0.7);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}

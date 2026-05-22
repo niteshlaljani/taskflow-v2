@@ -1,0 +1,44 @@
+{
+  "summary": "Sprint 3 testing — Backend 30/30 pytest GREEN (added 11 new tests for /api/my-issues, project CRUD with delete cascading to tasks, owner-only invites CRUD, public invite preview, idempotent invite accept with membership persistence, WS unauth=4401 close, and WS authenticated presence + task.created broadcast). Frontend pages My Issues, Projects (create+delete), Settings (workspace+members+invite links), and /join/{code} (logged-in and anonymous) ALL render correctly with proper data-testids. Drag-and-drop on Kanban board WORKS — dragged CORE-256 from Backlog to In Progress, status persisted via PATCH (verified by hard reload). Copy invite link writes to clipboard and toggles 'Copied' checkmark. HOWEVER: real-time WebSocket sync from the BROWSER is BROKEN — backend WS broadcasts confirmed working (pytest client receives presence + task.created), but the React client never connects: 'WebSocket is closed before the connection is established' warning, board-presence indicator never appears, and tasks created from a second browser context do NOT show on the first board without manual reload.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "WebSocket real-time board sync (useBoardSocket)",
+        "issue": "The browser WS connection fails to establish: console warning 'WebSocket connection to wss://...api/ws/board/{id} failed: WebSocket is closed before the connection is established'. Result: (a) [data-testid=board-presence] never appears even when a second authenticated client is connected on the same board, (b) tasks created from another browser/context do NOT appear in real time — page1 must be reloaded to see them. Backend WS endpoint itself works fine — proven by pytest using ?token=<jwt> query param. The frontend hook relies purely on cookies for WS auth, which appears to be stripped/not forwarded by the Emergent ingress during the WSS upgrade.",
+        "affected_selectors": ["[data-testid=board-presence]", "[data-testid^=task-card-]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix browser WS auth: add an endpoint like GET /api/auth/ws-token that returns a short-lived JWT in a JSON body (not httpOnly), and update useBoardSocket.js to fetch it and connect as `${wsUrl}?token=${t}`. The backend already supports the `?token=` fallback (server.py:_authenticate_ws lines 657-666) — only the frontend needs the change.",
+    "Alternative fix: in set_jwt_cookie, also write a non-httpOnly companion cookie (e.g. access_token_ws) with the same JWT for WSS handshake — keeps current useBoardSocket.js cookie-only flow.",
+    "After fix, verify board-presence avatar stack appears with 2+ connected clients, and that task.created/updated/deleted broadcasts update the board without reload."
+  ],
+  "critical_code_review_comments": [
+    "useBoardSocket.js relies on cookie auth for WS — fragile through reverse proxies/CDNs. Backend already exposes a ?token= fallback; the frontend should use it (low effort, high impact).",
+    "server.py is now 1059 lines — overdue for splitting into routers/{auth,workspaces,projects,tasks,comments,invites,ws}.py; not a blocker.",
+    "DELETE /api/projects deletes the project but does NOT delete its comments (only tasks). For demo data this is fine; for production consider cascading comments delete too.",
+    "accept_invite auto-deletes the user's previously-owned empty workspace (server.py:830-837). This is intentional MVP behavior but should be revisited when multi-workspace support is added — flagged in code comment already."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_backend.py (added 11 Sprint 3 tests: TestMyIssues, TestProjectsCRUD, TestInvites, TestWebSocket)"
+  ],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "~88% — all pages and DnD work; WS real-time sync is the only broken piece"},
+  "test_credentials": "demo@taskflow.com / demo1234 — working. Test users created on the fly: test_<hex>@example.com / secret123.",
+  "seed_data_creation": "Several new TEST_-prefixed tasks created during pytest run on Core Platform (auto-cleaned by their own tests where possible; a few stragglers like TEST_NI_*, TEST_ws_* may remain — harmless). Multiple test workspaces auto-removed by accept_invite logic. 4 invite links remain in LinearSync from test runs.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes WS auth in useBoardSocket.js: (1) reload board, (2) open Network tab — WS handshake should be 101, (3) open same board in incognito with another login — verify [data-testid=board-presence] appears on both pages with 2 avatars, (4) create a task via API from one session and verify it appears in the other without reload. Backend pytest is the source of truth — 30/30 must remain green after any fix.",
+  "rca of the issue": "RCA — Frontend WS connection fails: The hook /app/frontend/src/hooks/useBoardSocket.js (line 29) opens `new WebSocket(${REACT_APP_BACKEND_URL}/api/ws/board/${projectId})` and relies on the browser auto-attaching the httpOnly access_token cookie on the WSS handshake. The Emergent k8s ingress (or an intermediate proxy) appears to NOT forward Cookie headers during the WSS Upgrade, so the backend's _authenticate_ws receives no cookies, returns None, and closes with code 4401. Browser surfaces this as a generic 'WebSocket is closed before the connection is established'. Reproduction: open https://flow-dev-1.preview.emergentagent.com/app/board/proj_coreplatform as demo, observe console warning; query selector [data-testid=board-presence] returns null even with a second authenticated client on the same board. Mitigation (low risk): the backend already supports `?token=<jwt>` as a query-param fallback (server.py lines 657-666). Either (a) expose a JSON endpoint that returns the JWT and append it as a query param in useBoardSocket.js, or (b) set a non-httpOnly cookie (companion of access_token) that the browser will pass on the WS upgrade — option (a) is more secure."
+}
