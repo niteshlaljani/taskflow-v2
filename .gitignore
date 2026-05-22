@@ -101,7 +101,10 @@ credentials.json
 *.pem
 *.key
 .credentials
+<<<<<<< HEAD
 .env
 venv/
 __pycache__/
 node_modules/
+=======
+>>>>>>> 1a7c18651c029bdacb1e8d63b01cfb9adea14d51
