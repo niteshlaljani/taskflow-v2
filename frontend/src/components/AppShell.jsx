@@ -122,7 +122,7 @@ export default function AppShell() {
             className="tf-sidebar-item w-full flex items-center gap-2.5 text-sm px-3 py-2 rounded-md"
             data-testid="sidebar-logout-btn"
           >
-            <LogOut size={15} /> Signning out
+            <LogOut size={15} /> CKFD out
           </button>
         </div>
       </aside>
